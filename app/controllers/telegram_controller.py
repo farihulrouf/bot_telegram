@@ -4,6 +4,7 @@ from telethon import TelegramClient, events
 from telethon.tl.types import PeerChannel
 from telethon.tl.functions.messages import GetHistoryRequest
 from app.models.telegram_model import PhoneNumber, VerificationCode, create_client, sessions
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 import asyncio
 import os
 logging.basicConfig(level=logging.DEBUG)
@@ -72,7 +73,9 @@ async def verify(code: VerificationCode):
         await client.disconnect()
         raise Exception(f"Failed to verify code: {str(e)}")
 
-    
+
+
+
 async def get_channel_messages(phone: str, channel_username: str, limit: int = 10):
     client = sessions.get(phone)
     if not client:
@@ -87,7 +90,6 @@ async def get_channel_messages(phone: str, channel_username: str, limit: int = 1
             channel_username = channel_username[1:]
 
         entity = await client.get_entity(channel_username)
-
         messages = await client(GetHistoryRequest(
             peer=entity,
             offset_id=0,
@@ -101,31 +103,64 @@ async def get_channel_messages(phone: str, channel_username: str, limit: int = 1
 
         result = []
         for message in messages.messages:
+            logging.debug(f"Message: {message}")
+
             message_data = {
                 "sender_id": message.sender_id,
                 "chat_id": message.chat_id,
                 "text": message.message if message.message else "",
-                "date": message.date.isoformat(),  # Menambahkan tanggal dalam format ISO
+                "date": message.date.isoformat(),
                 "media": None
             }
 
             try:
-                if message.photo:
-                    media_path = await message.download_media(file="media/photos/")
+                if isinstance(message.media, MessageMediaPhoto):
+                    logging.debug(f"Photo detected: {message.media.photo}")
+                    output_path = "media/photos/"
+                    if not os.path.exists(output_path):
+                        os.makedirs(output_path)
+                    media_path = await client.download_media(message.media.photo, file=output_path)
                     logging.debug(f"Downloaded photo to: {media_path}")
-                    message_data["media"] = {"type": "photo", "path": media_path}
-                elif message.video:
-                    media_path = await message.download_media(file="media/videos/")
-                    logging.debug(f"Downloaded video to: {media_path}")
-                    message_data["media"] = {"type": "video", "path": media_path}
-                elif message.document:
-                    media_path = await message.download_media(file="media/files/")
-                    logging.debug(f"Downloaded document to: {media_path}")
-                    message_data["media"] = {"type": "document", "path": media_path}
-                elif message.media:
-                    media_path = await message.download_media(file="media/files/")
+                    if media_path:
+                        message_data["media"] = {"type": "photo", "path": media_path}
+                elif isinstance(message.media, MessageMediaDocument):
+                    doc = message.media.document
+                    if doc.mime_type.startswith('video'):
+                        logging.debug(f"Video detected: {doc}")
+                        output_path = "media/videos/"
+                        if not os.path.exists(output_path):
+                            os.makedirs(output_path)
+                        media_path = await client.download_media(doc, file=output_path)
+                        logging.debug(f"Downloaded video to: {media_path}")
+                        if media_path:
+                            message_data["media"] = {"type": "video", "path": media_path}
+                    elif doc.mime_type.startswith('application'):
+                        logging.debug(f"Document detected: {doc}")
+                        output_path = "media/files/"
+                        if not os.path.exists(output_path):
+                            os.makedirs(output_path)
+                        media_path = await client.download_media(doc, file=output_path)
+                        logging.debug(f"Downloaded document to: {media_path}")
+                        if media_path:
+                            message_data["media"] = {"type": "document", "path": media_path}
+                    else:
+                        logging.debug(f"Unknown document type detected: {doc}")
+                        output_path = "media/files/"
+                        if not os.path.exists(output_path):
+                            os.makedirs(output_path)
+                        media_path = await client.download_media(doc, file=output_path)
+                        logging.debug(f"Downloaded unknown document to: {media_path}")
+                        if media_path:
+                            message_data["media"] = {"type": "unknown", "path": media_path}
+                else:
+                    logging.debug(f"Unknown media detected: {message.media}")
+                    output_path = "media/files/"
+                    if not os.path.exists(output_path):
+                        os.makedirs(output_path)
+                    media_path = await client.download_media(message.media, file=output_path)
                     logging.debug(f"Downloaded unknown media to: {media_path}")
-                    message_data["media"] = {"type": "unknown", "path": media_path}
+                    if media_path:
+                        message_data["media"] = {"type": "unknown", "path": media_path}
             except Exception as e:
                 logging.error(f"Error downloading media: {e}")
                 message_data["media"] = {"type": "error", "path": None}
